@@ -3,9 +3,7 @@ import pandas as pd
 import numpy as np
 import math
 from datetime import date, timedelta
-from scipy import stats
-import plotly.express as px
-import plotly.graph_objects as go
+from sampler import Sampler
 
 np.set_printoptions(legacy='1.25')
 
@@ -30,6 +28,9 @@ class CovarianceMatrix:
         for symbol in symbol_list:
             self.df[f'{symbol} Return'] = np.log(self.df[f'Close {symbol}']).diff()
         self.df.dropna(inplace = True)
+        #insert sampler here
+        sampler = Sampler(self.df)
+        self.df = sampler.sampled_df
         self.interval = interval
         #Preliminary Calculations
         self.idx = self.df.index.get_loc(self.df.index[0])
