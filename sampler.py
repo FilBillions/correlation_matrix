@@ -1,4 +1,9 @@
 import numpy as np
+import csv
+import os
+import sys
+import pandas as pd
+sys.path.append(".")
 
 np.set_printoptions(legacy='1.25')
 
@@ -12,9 +17,26 @@ class Sampler:
         self.sampled_df = self.generate_sampled_df()
 
     def generate_sampled_df(self):
-        if self.sample_size >= len(self.df):
-            return self.df.copy()
-        else:
-            sampled_indices = np.random.choice(self.df.index, size=self.sample_size, replace=False)
-            sampled_df = self.df.loc[sampled_indices].sort_index()
+        # if sample.csv exists, use that to sample, or else generate random sample
+        if os.path.exists('sample.csv'):
+            sampled_df = pd.read_csv('sample.csv', index_col=0, parse_dates=True)
+            print('-'*20)
+            print(f"Using existing sample.csv with {len(sampled_df)} data points.")
+            print('-'*20)
             return sampled_df
+        else:
+            if self.sample_size >= len(self.df):
+                return self.df.copy()
+            else:
+                sampled_indices = np.random.choice(self.df.index, size=self.sample_size, replace=False)
+                sampled_df = self.df.loc[sampled_indices].sort_index()
+                print('-'*20)
+                print(f"Sampled {self.sample_size} data points from original {len(self.df)} data points.")
+                print('-'*20)
+                # Save the df as the sample
+                with open('sample.csv', mode='w', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow(['Date'] + list(self.df.columns))
+                    for idx, row in sampled_df.iterrows():
+                        writer.writerow([idx] + list(row))
+                return sampled_df
