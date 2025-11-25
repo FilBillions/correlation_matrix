@@ -2,20 +2,28 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import math
+import seaborn as sns
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+
 from datetime import date, timedelta
 from sampler import Sampler
 
 np.set_printoptions(legacy='1.25')
 
+
 #Goals
 # Take in a list of securities, and produce a covariance matrix of their returns
-class CovarianceMatrix:
+class PortfolioManagement:
     def __init__(self,
                  symbol_list,
                  start = str(date.today() - timedelta(59)),
                  end = str(date.today() - timedelta(1)),
                  interval = '1d',
                  optional_df=None):
+        market_symbol = 'SPY'
+        if market_symbol not in symbol_list:
+            symbol_list.insert(0, market_symbol)
         if optional_df is not None:
             self.df = optional_df
         else:
@@ -34,6 +42,19 @@ class CovarianceMatrix:
         self.interval = interval
         #Preliminary Calculations
         self.idx = self.df.index.get_loc(self.df.index[0])
+        self.mean_dict = {}
+        self.variance_dict = {}
+        for symbol in symbol_list:
+            returns_array = self.df[f'{symbol} Return']
+            n = len(returns_array)
+            mean_return = returns_array.mean()
+            variance_return = 0
+            for return_idx in range(0, n):
+                variance_return += (returns_array.iloc[return_idx] - mean_return)**2
+            variance_return = variance_return / (n - 1)
+            self.mean_dict[symbol] = mean_return
+            self.variance_dict[symbol] = variance_return
+        print(self.variance_dict)
 
     def generate_covariance_matrix(self):
         def Covariance_calc(return_array_1, return_array_2): # Covariance numerator
@@ -65,7 +86,8 @@ class CovarianceMatrix:
         print("Covariance measures the directional relationship between two assets")
         print("Presented as percentages")
         return cov_matrix * 100
-    def generate_correlation_matrix(self):
+    
+    def generate_correlation_matrix(self, print_on=True, return_on=False):
         def Correlation_calc(return_array_1, return_array_2): # Correlation numerator
             SSxy = 0
             SSxx = 0
@@ -86,9 +108,31 @@ class CovarianceMatrix:
                     corr_matrix.iloc[i,j] = 1
                 else:
                     corr_matrix.iloc[i,j] = Correlation_calc(self.df[f'{self.symbol_list[i]} Return'], self.df[f'{self.symbol_list[j]} Return'])
-        print("Correlation Matrix of Returns:")
-        print("Correlation measures the strength of relationship between two assets")
-        print("Presented as percentages")
-        return corr_matrix * 100
-    def pairs_closest_to_0(self, n=5):
-        pass
+        #apply color gradient to dataframe
+        #vmin should be the smallest value in the matrix excluding the diagonal
+        min_val = corr_matrix.min().min()
+        #set heatmap dimensions
+        corr_matrix = corr_matrix.astype(float)
+        if print_on:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            rdgn = sns.diverging_palette(h_neg=355, h_pos=255, s=100, sep=1, l=50, as_cmap=True)
+            sns.heatmap(corr_matrix, annot=True, fmt=".3f", cmap=rdgn, vmin=-1, center= 0, vmax=1, linewidths=1.3, linecolor='black', cbar=True, ax=ax)
+            plt.title('Correlation Matrix')
+            print("Correlation measures the strength of relationship between two assets")
+            print("Closer to 1 means strong positive correlation, closer to -1 means strong negative correlation")
+            print("A value of 0 means no correlation")
+            plt.show()
+        if return_on:
+            return corr_matrix
+    def calculate_beta(self):
+        correlation_matrix = self.generate_correlation_matrix(print_on=False, return_on=True)
+        market_symbol = self.symbol_list[0]
+        beta_dict = {}
+        # for every symbol except the market symbol
+        for symbol in self.symbol_list[1:]:
+            beta = (correlation_matrix.loc[symbol, market_symbol] *
+                    (math.sqrt(self.variance_dict[market_symbol]) / math.sqrt(self.variance_dict[symbol])))
+            beta_dict[symbol] = beta
+        beta_df = pd.DataFrame.from_dict(beta_dict, orient='index', columns=['Beta'])
+        return beta_df
+
