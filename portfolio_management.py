@@ -54,7 +54,6 @@ class PortfolioManagement:
             variance_return = variance_return / (n - 1)
             self.mean_dict[symbol] = mean_return
             self.variance_dict[symbol] = variance_return
-        print(self.variance_dict)
 
     def generate_covariance_matrix(self):
         def Covariance_calc(return_array_1, return_array_2): # Covariance numerator
@@ -65,7 +64,8 @@ class PortfolioManagement:
             array2_mean = return_array_2.mean()
             for return_idx in range(0, index):
                 SSxy += (return_array_1.iloc[return_idx] - array1_mean) * (return_array_2.iloc[return_idx] - array2_mean)
-            return SSxy / (n - 1)
+            cov = SSxy / (n - 1)
+            return cov
         def Variance_calc(return_array): # variance numerator 1
             #Works as SSyy also
             SSxx = 0
@@ -74,7 +74,8 @@ class PortfolioManagement:
             array1_mean = return_array.mean()
             for return_idx in range(0, index):
                 SSxx += ((return_array.iloc[return_idx] - array1_mean)**2)
-            return SSxx / (n - 1)
+            var_x = SSxx / (n - 1)
+            return var_x
         cov_matrix = pd.DataFrame(index=self.symbol_list, columns=self.symbol_list)
         for i in range(len(self.symbol_list)):
             for j in range(len(self.symbol_list)):
@@ -91,7 +92,7 @@ class PortfolioManagement:
         def Correlation_calc(return_array_1, return_array_2): # Correlation numerator
             SSxy = 0
             SSxx = 0
-            SSyy = 0
+            SSyy= 0
             n = len(return_array_1)
             index = return_array_1.index.get_loc(return_array_1.index[-1])
             array1_mean = return_array_1.mean()
@@ -100,7 +101,10 @@ class PortfolioManagement:
                 SSxy += (return_array_1.iloc[return_idx] - array1_mean) * (return_array_2.iloc[return_idx] - array2_mean)
                 SSxx += ((return_array_1.iloc[return_idx] - array1_mean)**2)
                 SSyy += ((return_array_2.iloc[return_idx] - array2_mean)**2)
-            return SSxy / math.sqrt(SSxx) * math.sqrt(SSyy)
+            cov = SSxy / (n - 1)
+            var_xx = SSxx / (n - 1)
+            var_yy = SSyy / (n - 1)
+            return cov / (math.sqrt(var_xx) * math.sqrt(var_yy))
         corr_matrix = pd.DataFrame(index=self.symbol_list, columns=self.symbol_list)
         for i in range(len(self.symbol_list)):
             for j in range(len(self.symbol_list)):
@@ -108,10 +112,6 @@ class PortfolioManagement:
                     corr_matrix.iloc[i,j] = 1
                 else:
                     corr_matrix.iloc[i,j] = Correlation_calc(self.df[f'{self.symbol_list[i]} Return'], self.df[f'{self.symbol_list[j]} Return'])
-        #apply color gradient to dataframe
-        #vmin should be the smallest value in the matrix excluding the diagonal
-        min_val = corr_matrix.min().min()
-        #set heatmap dimensions
         corr_matrix = corr_matrix.astype(float)
         if print_on:
             fig, ax = plt.subplots(figsize=(10, 8))
@@ -124,15 +124,22 @@ class PortfolioManagement:
             plt.show()
         if return_on:
             return corr_matrix
-    def calculate_beta(self):
+        
+    def calculate_statistics(self):
         correlation_matrix = self.generate_correlation_matrix(print_on=False, return_on=True)
         market_symbol = self.symbol_list[0]
         beta_dict = {}
-        # for every symbol except the market symbol
+        expected_return = {}
+        expected_market_return = .1 #Assumed expected market return of 10%
+        rf_rate = .02 #Assumed risk free rate of 2%
+        #Beta Calculation
         for symbol in self.symbol_list[1:]:
             beta = (correlation_matrix.loc[symbol, market_symbol] *
-                    (math.sqrt(self.variance_dict[market_symbol]) / math.sqrt(self.variance_dict[symbol])))
+                    (math.sqrt(self.variance_dict[symbol]) / math.sqrt(self.variance_dict[market_symbol])))
             beta_dict[symbol] = beta
-        beta_df = pd.DataFrame.from_dict(beta_dict, orient='index', columns=['Beta'])
-        return beta_df
+        statistic_df = pd.DataFrame.from_dict(beta_dict, orient='index', columns=['Beta'])
+        for symbol in self.symbol_list[1:]:
+            expected_return[symbol] = rf_rate + beta_dict[symbol] * (expected_market_return - rf_rate)
+        statistic_df['Expected Return'] = pd.Series(expected_return)
+        return statistic_df
 
