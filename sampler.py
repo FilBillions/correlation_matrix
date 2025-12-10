@@ -11,7 +11,7 @@ np.set_printoptions(legacy='1.25')
 # Usable in any model
 # Take in a dataframe and return a randomized sampled data frame
 class Sampler:
-    def __init__(self, df, sample_size=100):
+    def __init__(self, df, sample_size=150):
         self.df = df
         self.sample_size = sample_size
         self.sampled_df = self.generate_sampled_df()
