@@ -13,33 +13,20 @@ from datetime import date, timedelta
 from sampler import Sampler
 
 np.set_printoptions(legacy='1.25')
-def convert_portfolio_to_symbol_list(return_symbols=False, return_weights=False):
-    #look at portfolio weights file and convert to a list of the symbols only
-    with open('portfolio_weights.csv', mode='r') as file:
-        csv_reader = csv.DictReader(file)
-        symbol_list = []
-        weight_dict = {}
-        weight_list = []
-        for row in csv_reader:
-            symbol_list.append(row['Ticker'])
-            weight_list.append(row['Weight'])
-    if return_symbols:
-        return symbol_list
-    if return_weights:
-        weight_dict = dict(zip(symbol_list, weight_list))
-        return weight_dict
 
 class PortfolioManagement:
     def __init__(self,
-                 symbol_list, 
+                 portfolio_dictionary,
+                 market_symbol = 'SPY',
                  start = str(date.today() - timedelta(59)),
                  end = str(date.today() - timedelta(1)),
                  interval = '1d',
                  optional_df=None,
                  annualize=False):
-        market_symbol = 'SPY'
-        if market_symbol not in symbol_list:
-            symbol_list.insert(0, market_symbol)
+        symbol_list = list(portfolio_dictionary.keys())
+        self.market_symbol = market_symbol.upper()
+        if self.market_symbol not in symbol_list:
+            symbol_list.insert(0, self.market_symbol)
         if optional_df is not None:
             self.df = optional_df
         else:
@@ -48,7 +35,12 @@ class PortfolioManagement:
             if isinstance(self.df.columns, pd.MultiIndex):
                 self.df.columns = [' '.join(col).strip() for col in self.df.columns.values]
         self.symbol_list = symbol_list
-        self.weight_dict = convert_portfolio_to_symbol_list(return_weights=True)
+        for symbol in self.symbol_list:
+            self.df=self.df.drop(columns=[f'Volume {symbol}'])
+            self.df=self.df.drop(columns=[f'High {symbol}'])
+            self.df=self.df.drop(columns=[f'Low {symbol}'])
+            self.df=self.df.drop(columns=[f'Open {symbol}'])
+        self.weight_dict = portfolio_dictionary
         self.df['Day Count'] = np.arange(1, len(self.df) + 1)
         if annualize and interval == '1d':
             from daily_to_yearly_conversion import Converter
@@ -62,7 +54,8 @@ class PortfolioManagement:
         sampler = Sampler(self.df)
         self.df = sampler.sampled_df
         self.interval = interval
-#Preliminary Calculations
+#Preliminary Calculation
+        self.annual_risk_free_rate = .02
         self.idx = self.df.index.get_loc(self.df.index[0])
         self.mean_dict = {}
         self.variance_dict = {}
@@ -154,79 +147,70 @@ class PortfolioManagement:
     def calculate_statistics(self, return_portfolio_only=False):
         correlation_matrix = self.generate_correlation_matrix(print_on=False, return_on=True)
         covariance_matrix = self.generate_covariance_matrix(print_on=False, return_on=True)
-        market_symbol = self.symbol_list[0]
-        beta_dict = {}
-        expected_return = {}
-        sharpe_ratio_dict = {}
-        m2_alpha_dict = {}
-        jensens_alpha_dict = {}
-        tracking_error_dict = {}
-        information_ratio_dict = {}
-        expected_market_return = self.mean_dict[market_symbol]
-        annual_risk_free_rate = .02
+        self.beta_dict = {}
+        self.expected_return = {}
+        self.sharpe_ratio_dict = {}
+        self.m2_alpha_dict = {}
+        self.jensens_alpha_dict = {}
+        self.nonsystematic_variance_dict = {}
+        self.information_ratio_dict = {}
+        self.expected_market_return = self.mean_dict[self.market_symbol]
 #Beta Calculation
         for symbol in self.symbol_list[0:]:
-            beta = (correlation_matrix.loc[symbol, market_symbol] *
-                    (math.sqrt(self.variance_dict[symbol]) / math.sqrt(self.variance_dict[market_symbol])))
-            beta_dict[symbol] = beta
-        statistic_df = pd.DataFrame.from_dict(beta_dict, orient='index', columns=['Beta'])
+            beta = (correlation_matrix.loc[symbol, self.market_symbol] *
+                    (math.sqrt(self.variance_dict[symbol]) / math.sqrt(self.variance_dict[self.market_symbol])))
+            self.beta_dict[symbol] = beta
+        statistic_df = pd.DataFrame.from_dict(self.beta_dict, orient='index', columns=['Beta'])
 #Weights
         for symbol in self.symbol_list[0:]:
             if symbol in self.weight_dict:
                 statistic_df.loc[symbol, 'Actual Weight'] = float(self.weight_dict[symbol])
             else:
                 statistic_df.loc[symbol, 'Actual Weight'] = 0.0
-# tracking error calculation
-        for symbol in self.symbol_list[0:]:
-            tracking_error = 0
-            n = len(self.df)
-            index = self.df.index.get_loc(self.df.index[-1])
-            for return_idx in range(0, index):
-                tracking_error += (self.df[f'{symbol} Return'].iloc[return_idx] - self.df[f'{market_symbol} Return'].iloc[return_idx])**2
-            tracking_error_var = math.sqrt(tracking_error / (n - 1))
-            tracking_error_dict[symbol] = tracking_error_var
 #expected return calculation using CAPM
         for symbol in self.symbol_list[0:]:
-            expected_return[symbol] = annual_risk_free_rate + beta_dict[symbol] * (expected_market_return - annual_risk_free_rate)
-        statistic_df['Expected Return'] = pd.Series(expected_return)
+            self.expected_return[symbol] = self.annual_risk_free_rate + self.beta_dict[symbol] * (self.expected_market_return - self.annual_risk_free_rate)
+        statistic_df['Expected Return'] = pd.Series(self.expected_return)
 #variance
         statistic_df['Variance'] = pd.Series(self.variance_dict)
 #sharpe ratio
         for symbol in self.symbol_list[0:]:
-            sharpe_ratio = (expected_return[symbol] - annual_risk_free_rate) / math.sqrt(self.variance_dict[symbol])
-            sharpe_ratio_dict[symbol] = sharpe_ratio
-        statistic_df['Sharpe Ratio'] = pd.DataFrame.from_dict(sharpe_ratio_dict, orient='index', columns=['Sharpe Ratio'])
+            sharpe_ratio = (self.expected_return[symbol] - self.annual_risk_free_rate) / math.sqrt(self.variance_dict[symbol])
+            self.sharpe_ratio_dict[symbol] = sharpe_ratio
+        statistic_df['Sharpe Ratio'] = pd.DataFrame.from_dict(self.sharpe_ratio_dict, orient='index', columns=['Sharpe Ratio'])
 #m2
         for symbol in self.symbol_list[0:]:
-            m2 = (expected_return[symbol] - annual_risk_free_rate) * (math.sqrt(self.variance_dict[market_symbol]) / math.sqrt(self.variance_dict[symbol])) + annual_risk_free_rate
-            m2_alpha_dict[symbol] = m2 - expected_market_return
-        statistic_df['M2 Alpha'] = pd.DataFrame.from_dict(m2_alpha_dict, orient='index', columns=['M2 Alpha'])
+            m2 = (self.expected_return[symbol] - self.annual_risk_free_rate) * (math.sqrt(self.variance_dict[self.market_symbol]) / math.sqrt(self.variance_dict[symbol])) + self.annual_risk_free_rate
+            self.m2_alpha_dict[symbol] = m2 - self.expected_market_return
+        statistic_df['M2 Alpha'] = pd.DataFrame.from_dict(self.m2_alpha_dict, orient='index', columns=['M2 Alpha'])
 # treynor ratio
 # use actual returns for treynor ratio
         for symbol in self.symbol_list[0:]:
-            treynor_ratio = (self.mean_dict[symbol] - annual_risk_free_rate) / beta_dict[symbol]
+            treynor_ratio = (self.mean_dict[symbol] - self.annual_risk_free_rate) / self.beta_dict[symbol]
             statistic_df.loc[symbol, 'Treynor Ratio'] = treynor_ratio
 #jensen's alpha -> based on the mean return
 # jensens alpha has to use actual returns, it cannot use expected returns
 # do not perform calculation for market symbol
         for symbol in self.symbol_list[0:]:
-            if symbol == market_symbol:
-                jensens_alpha_dict[symbol] = 0
+            if symbol == self.market_symbol:
+                self.jensens_alpha_dict[symbol] = 0
             else:
-                jensens_alpha = (self.mean_dict[symbol] - (annual_risk_free_rate + beta_dict[symbol] * (expected_market_return - annual_risk_free_rate)))
-                jensens_alpha_dict[symbol] = jensens_alpha
-        statistic_df['Jensen\'s Alpha'] = pd.DataFrame.from_dict(jensens_alpha_dict, orient='index', columns=['Jensen\'s Alpha'])
+                jensens_alpha = (self.mean_dict[symbol] - (self.annual_risk_free_rate + self.beta_dict[symbol] * (self.expected_market_return - self.annual_risk_free_rate)))
+                self.jensens_alpha_dict[symbol] = jensens_alpha
+        statistic_df['Jensen\'s Alpha'] = pd.DataFrame.from_dict(self.jensens_alpha_dict, orient='index', columns=['Jensen\'s Alpha'])
+#non-systematic variance
+        for symbol in self.symbol_list[0:]:
+            nonsystematic_variance = self.variance_dict[symbol] - (self.beta_dict[symbol]**2 * self.variance_dict[self.market_symbol])
+            self.nonsystematic_variance_dict[symbol] = nonsystematic_variance
+            statistic_df.loc[symbol, 'Non-Systematic Variance'] = nonsystematic_variance
 #information ratio
         for symbol in self.symbol_list[0:]:
-            if symbol == market_symbol:
-                information_ratio_dict[symbol] = 0
+            if symbol == self.market_symbol:
+                self.information_ratio_dict[symbol] = 0
             else:
-                information_ratio = jensens_alpha_dict[symbol] / tracking_error_dict[symbol]
-                information_ratio_dict[symbol] = information_ratio
-        statistic_df['Information Ratio'] = pd.DataFrame.from_dict(information_ratio_dict, orient='index', columns=['Information Ratio'])
-#Weight Difference
-        for symbol in self.symbol_list[0:]:
-            statistic_df.loc[symbol, 'Weight Difference'] = statistic_df.loc[symbol, 'Actual Weight'] - statistic_df.loc[symbol, 'Information Ratio']
+                information_ratio = self.jensens_alpha_dict[symbol] / self.nonsystematic_variance_dict[symbol]
+                self.information_ratio_dict[symbol] = information_ratio
+        statistic_df['Information Ratio'] = pd.DataFrame.from_dict(self.information_ratio_dict, orient='index', columns=['Information Ratio'])
 
 # -------------------------------
 # -------------------------------
@@ -242,11 +226,13 @@ class PortfolioManagement:
                 portfolio_expected_return = statistic_df.loc[symbol, 'Expected Return'] * statistic_df.loc[symbol, 'Actual Weight']
             else:
                 portfolio_expected_return += statistic_df.loc[symbol, 'Expected Return'] * statistic_df.loc[symbol, 'Actual Weight']
-        portfolio_expected_return += (1 - portfolio_row.loc['Portfolio', 'Actual Weight']) * annual_risk_free_rate
+        portfolio_expected_return += (1 - portfolio_row.loc['Portfolio', 'Actual Weight']) * self.annual_risk_free_rate
         portfolio_row.loc['Portfolio', 'Expected Return'] = portfolio_expected_return
 #portfolio variance
 #portfolio variance is calculated = W**2 * Var + W*W*COV
-# we need to throw Cash in the variance here too
+#We know Cash variance is 0. We also know Cash Correlation is 0.
+#We know weight in cash is 1 - sum of weights in securities
+#Therefore, we do not need to include cash in the variance calculation because its sum of covariance terms would = 0, and its sum of variance terms would also = 0.
         sum_of_covariance_terms = 0
         for i, symbol_1 in enumerate(self.symbol_list[0:]):
             for j, symbol_2 in enumerate(self.symbol_list[0:]):
@@ -262,98 +248,75 @@ class PortfolioManagement:
             sum_of_variance_terms += (weight**2) * variance
         portfolio_variance = sum_of_variance_terms + sum_of_covariance_terms
         portfolio_row.loc['Portfolio', 'Variance'] = portfolio_variance
-#portfolio beta -> maybe look at this later
+#portfolio beta -> weighted average of holding betas
         portfolio_beta = 0
         for symbol in self.symbol_list[0:]:
             portfolio_beta += statistic_df.loc[symbol, 'Beta'] * statistic_df.loc[symbol, 'Actual Weight']
         portfolio_row.loc['Portfolio', 'Beta'] = portfolio_beta
 #portfolio sharpe ratio
-        portfolio_sharpe_ratio = (portfolio_expected_return - annual_risk_free_rate) / math.sqrt(portfolio_variance)
+        portfolio_sharpe_ratio = (portfolio_expected_return - self.annual_risk_free_rate) / math.sqrt(portfolio_variance)
         portfolio_row.loc['Portfolio', 'Sharpe Ratio'] = portfolio_sharpe_ratio
 #portfolio m2 alpha
-        portfolio_m2 = (portfolio_expected_return - annual_risk_free_rate) * (math.sqrt(self.variance_dict[market_symbol]) / math.sqrt(portfolio_variance)) + annual_risk_free_rate
-        portfolio_row.loc['Portfolio', 'M2 Alpha'] = portfolio_m2 - expected_market_return
+        portfolio_m2 = (portfolio_expected_return - self.annual_risk_free_rate) * (math.sqrt(self.variance_dict[self.market_symbol]) / math.sqrt(portfolio_variance)) + self.annual_risk_free_rate
+        portfolio_row.loc['Portfolio', 'M2 Alpha'] = portfolio_m2 - self.expected_market_return
 #portfolio treynor ratio
-        portfolio_treynor_ratio = (portfolio_expected_return - annual_risk_free_rate) / portfolio_beta
+        portfolio_treynor_ratio = (portfolio_expected_return - self.annual_risk_free_rate) / portfolio_beta
         portfolio_row.loc['Portfolio', 'Treynor Ratio'] = portfolio_treynor_ratio
 #portfolio jensens alpha
-        portfolio_jensens_alpha = (portfolio_expected_return - (annual_risk_free_rate + 1 * (expected_market_return - annual_risk_free_rate)))
+        portfolio_jensens_alpha = (portfolio_expected_return - (self.annual_risk_free_rate + 1 * (self.expected_market_return - self.annual_risk_free_rate)))
         portfolio_row.loc['Portfolio', 'Jensen\'s Alpha'] = portfolio_jensens_alpha
 #portfolio weight is the sum of all the securities in the portfolio
         portfolio_row.loc['Portfolio', 'Actual Weight'] = statistic_df['Actual Weight'].sum()
         portfolio_row = portfolio_row.dropna(axis=1, how='any')
         statistic_df = pd.concat([statistic_df, portfolio_row])
-
-# -------------------------------
-# -------------------------------
-#Start optimized portfolio
-
-        optimal_portfolio_row = pd.DataFrame(columns=statistic_df.columns)
-        optimal_portfolio_weight = 0
-#portfolio expected return
-# 1 - Information Ratio of portfolio should be ivnested in the risk free rate!!!
-# portfolio weight is the sum of all the information ratios in the portfolio
-# if information ratio is negative, do not include in portfolio
-        for symbol in self.symbol_list[0:]:
-            if statistic_df.loc[symbol, 'Information Ratio'] > 0:
-                optimal_portfolio_weight += statistic_df.loc[symbol, 'Information Ratio']
-        optimal_portfolio_row.loc['Optimal Portfolio', 'Actual Weight'] = optimal_portfolio_weight
-        for symbol in self.symbol_list[0:]:
-            if symbol == self.symbol_list[0]:
-                optimal_portfolio_expected_return = statistic_df.loc[symbol, 'Expected Return'] * statistic_df.loc[symbol, 'Information Ratio']
-            else:
-                optimal_portfolio_expected_return += statistic_df.loc[symbol, 'Expected Return'] * statistic_df.loc[symbol, 'Information Ratio']
-        optimal_portfolio_expected_return += (1 - optimal_portfolio_row.loc['Optimal Portfolio', 'Actual Weight']) * annual_risk_free_rate
-        optimal_portfolio_row.loc['Optimal Portfolio', 'Expected Return'] = optimal_portfolio_expected_return
-    #portfolio variance
-    #portfolio variance is calculated = W**2 * Var + W*W*COV
-        sum_of_covariance_terms = 0
-        for i, symbol_1 in enumerate(self.symbol_list[0:]):
-            for j, symbol_2 in enumerate(self.symbol_list[0:]):
-                weight_1 = statistic_df.loc[symbol_1, 'Information Ratio']
-                weight_2 = statistic_df.loc[symbol_2, 'Information Ratio']
-                covariance = covariance_matrix.loc[symbol_1, symbol_2]
-                if i != j:
-                    sum_of_covariance_terms += weight_1 * weight_2 * covariance
-        sum_of_variance_terms = 0
-        for symbol in self.symbol_list[0:]:
-            weight = statistic_df.loc[symbol, 'Information Ratio']
-            variance = statistic_df.loc[symbol, 'Variance']
-            sum_of_variance_terms += (weight**2) * variance
-        optimal_portfolio_variance = sum_of_variance_terms + sum_of_covariance_terms
-        optimal_portfolio_row.loc['Optimal Portfolio', 'Variance'] = optimal_portfolio_variance
-        #portfolio beta -> maybe look at this later
-        optimal_portfolio_beta = 0
-        for symbol in self.symbol_list[0:]:
-            optimal_portfolio_beta += statistic_df.loc[symbol, 'Beta'] * statistic_df.loc[symbol, 'Information Ratio']
-        optimal_portfolio_row.loc['Optimal Portfolio', 'Beta'] = optimal_portfolio_beta
-        #portfolio sharpe ratio
-        optimal_portfolio_sharpe_ratio = (optimal_portfolio_expected_return - annual_risk_free_rate) / math.sqrt(optimal_portfolio_variance)
-        optimal_portfolio_row.loc['Optimal Portfolio', 'Sharpe Ratio'] = optimal_portfolio_sharpe_ratio
-        #portfolio m2 alpha
-        optimal_portfolio_m2 = (optimal_portfolio_expected_return - annual_risk_free_rate) * (math.sqrt(self.variance_dict[market_symbol]) / math.sqrt(optimal_portfolio_variance)) + annual_risk_free_rate
-        optimal_portfolio_row.loc['Optimal Portfolio', 'M2 Alpha'] = optimal_portfolio_m2 - expected_market_return
-        #portfolio treynor ratio
-        optimal_portfolio_treynor_ratio = (optimal_portfolio_expected_return - annual_risk_free_rate) / optimal_portfolio_beta
-        optimal_portfolio_row.loc['Optimal Portfolio', 'Treynor Ratio'] = optimal_portfolio_treynor_ratio
-        #portfolio jensens alpha
-        optimal_portfolio_jensens_alpha = (optimal_portfolio_expected_return - (annual_risk_free_rate + 1 * (expected_market_return - annual_risk_free_rate)))
-        optimal_portfolio_row.loc['Optimal Portfolio', 'Jensen\'s Alpha'] = optimal_portfolio_jensens_alpha
-        optimal_portfolio_row = optimal_portfolio_row.dropna(axis=1, how='all')
-        statistic_df = pd.concat([statistic_df, optimal_portfolio_row])
         if return_portfolio_only:
             print('Portfolio Comparison to Market:')
-            if optimal_portfolio_sharpe_ratio > sharpe_ratio_dict[market_symbol]:
-                print(f"Portfolio has a higher Sharpe Ratio than the Market")
-                print(f"Therefore, Portfolio is receiving more return per unit of risk taken than market")
-            else:
-                print(f"Market has a higher Sharpe Ratio than the Portfolio")
-                print(f"Therefore, Market is receiving more return per unit of risk taken than portfolio")
-                print("Portfolio may need to be rebalanced to improve performance")
-            statistic_df = statistic_df.loc[[market_symbol, 'Portfolio', 'Optimal Portfolio']]
-            return statistic_df.drop(columns=['Weight Difference', 'Information Ratio'])
+            statistic_df = statistic_df.loc[[self.market_symbol, 'Portfolio']]
+            return statistic_df.drop(columns=['Information Ratio'])
         
         return statistic_df
+
+    def risk_return_tradeoff_test(self, portfolio_mode=False):
+        #take the market portfolio
+        #syphon through the list of securities, and perform the evaluation calculation to see if they belong in the portfolio
+        #if they do not, print this security does not belong in the portfolio and print the various metrics
+        #if they do, print this security belongs in the portfolio and print the various metrics
+        # we also need to create a new optimized portfolio, so we need the weight of the securities included, which is information ratio
+        # 1- weight is invested in risk free rate
+        # I also want this to work for a given portfolio
+
+        # Weight of a security in portfolio equals the Information Ratio of the security divided by the sum of all information ratios in the portfolio
+        #if the jensen alpha is negative, it is not included in the portfolio
+        statistic_df = self.calculate_statistics()
+        correlation_matrix = self.generate_correlation_matrix(print_on=False, return_on=True)
+        covariance_matrix = self.generate_covariance_matrix(print_on=False, return_on=True)
+        risk_free_rate = .02
+        for symbol in self.symbol_list[0:]:
+            if symbol == self.market_symbol:
+                continue
+            else:
+                new_beta = (correlation_matrix.loc[symbol, self.market_symbol] * (math.sqrt(self.variance_dict[symbol]) / math.sqrt(self.variance_dict[self.market_symbol])))
+                new_expected_return = risk_free_rate + new_beta * (statistic_df.loc[self.market_symbol, 'Expected Return'] - risk_free_rate)
+                new_sharpe_ratio = (new_expected_return - risk_free_rate) / math.sqrt(self.variance_dict[symbol])
+                if new_sharpe_ratio > (statistic_df.loc[self.market_symbol, 'Sharpe Ratio'] * (correlation_matrix.loc[symbol, self.market_symbol])):
+                    print(f"{symbol}: Passed Check 1: New Sharpe Ratio is Greater Than Previous Sharpe Ratio * Correlation")
+                    print(f"New Expected Return: {new_expected_return:.4f}, Old Expected Return: {statistic_df.loc[self.market_symbol, 'Expected Return']:.4f}")
+                    print(f"New Sharpe Ratio: {new_sharpe_ratio:.4f}, Old Sharpe Ratio: {statistic_df.loc[self.market_symbol, 'Sharpe Ratio']:.4f}")
+                    if self.jensens_alpha_dict[symbol] > 0:
+                        print(f'Passed Check 2: Jensen\'s Alpha is positive')
+                        print("--------------------------------------------------")
+                    else:
+                        print(f"Failed Check 2: Jensen\'s Alpha is Negative")
+                        print(f'It is therefore a Detrimental Addition to the Portfolio.')
+                        print("--------------------------------------------------")
+                else:
+                    print(f"{symbol}: Detrimental Addition to Portfolio")
+                    print("--------------------------------------------------")
+        
+        
+            
+        
+    
     def return_df(self):
         #show all rows
         pd.set_option('display.max_rows', None)

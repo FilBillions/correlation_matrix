@@ -11,7 +11,7 @@ np.set_printoptions(legacy='1.25')
 # Usable in any model
 # Take in a dataframe and return a randomized sampled data frame
 class Sampler:
-    def __init__(self, df, sample_size=150):
+    def __init__(self, df, sample_size=300):
         self.df = df
         self.sample_size = sample_size
         self.sampled_df = self.generate_sampled_df()
@@ -31,6 +31,9 @@ class Sampler:
             return sampled_df
         else:
             if self.sample_size >= len(self.df):
+                print(f'Requested Sample Size {self.sample_size} is greater than the available Data Set of {len(self.df)}')
+                print(f'Returning the full dataset. If a sample is needed, considered changing the dataset parameters.')
+                print(f'No need to export sample.csv.')
                 return self.df.copy()
             else:
                 sampled_indices = np.random.choice(self.df.index, size=self.sample_size, replace=False)
