@@ -155,6 +155,10 @@ class PortfolioManagement:
         self.nonsystematic_variance_dict = {}
         self.information_ratio_dict = {}
         self.expected_market_return = self.mean_dict[self.market_symbol]
+        self.check1_dict = {}
+        #this is the weight of the non-market security within only the portfolio of non-market securities
+        self.non_market_weightings_only_dict = {}
+        self.optimal_portfolio_weighting_dict = {}
 #Beta Calculation
         for symbol in self.symbol_list[0:]:
             beta = (correlation_matrix.loc[symbol, self.market_symbol] *
@@ -211,7 +215,55 @@ class PortfolioManagement:
                 information_ratio = self.jensens_alpha_dict[symbol] / self.nonsystematic_variance_dict[symbol]
                 self.information_ratio_dict[symbol] = information_ratio
         statistic_df['Information Ratio'] = pd.DataFrame.from_dict(self.information_ratio_dict, orient='index', columns=['Information Ratio'])
-
+#Check 1: is the sharpe ratio of the security greater than the market sharpe ratio * Correlation
+        for symbol in self.symbol_list[0:]:
+            if symbol == self.market_symbol:
+                self.check1_dict[symbol] = True
+            else:
+                check1_beta = (correlation_matrix.loc[symbol, self.market_symbol] * (math.sqrt(self.variance_dict[symbol]) / math.sqrt(self.variance_dict[self.market_symbol])))
+                check1_expected_return = self.annual_risk_free_rate + check1_beta * (statistic_df.loc[self.market_symbol, 'Expected Return'] - self.annual_risk_free_rate)
+                check1_sharpe_ratio = (check1_expected_return - self.annual_risk_free_rate) / math.sqrt(self.variance_dict[symbol])
+                if check1_sharpe_ratio > (statistic_df.loc[self.market_symbol, 'Sharpe Ratio'] * (correlation_matrix.loc[symbol, self.market_symbol])):
+                    self.check1_dict[symbol] = True
+                else:
+                    self.check1_dict[symbol] = False
+        statistic_df['Check 1'] = pd.DataFrame.from_dict(self.check1_dict, orient='index', columns=['Check 1'])
+#Check 2: Is the Jensen Alpha Positive
+#Optimal Portfolio Weighting
+        sum_of_valid_information_ratios = 0
+        sum_of_valid_alphas = 0
+        sum_of_valid_nonsys_vars = 0
+        #Create weightings for non-market portfolio candidates
+        for symbol in self.symbol_list[0:]:
+            if self.jensens_alpha_dict[symbol] > 0 and self.check1_dict[symbol] is True:
+                sum_of_valid_information_ratios += self.information_ratio_dict[symbol]
+        for symbol in self.symbol_list[0:]:
+            if self.jensens_alpha_dict[symbol] > 0 and self.check1_dict[symbol] is True:
+                    #this is the weight of the non-market security within only the portfolio of non-market securities
+                    self.non_market_weightings_only_dict[symbol] = self.information_ratio_dict[symbol] / sum_of_valid_information_ratios
+            else:
+                self.non_market_weightings_only_dict[symbol] = 0
+        for symbol in self.symbol_list:
+            sum_of_valid_alphas += self.non_market_weightings_only_dict[symbol] * self.jensens_alpha_dict[symbol]
+            sum_of_valid_nonsys_vars += self.non_market_weightings_only_dict[symbol]**2 * self.nonsystematic_variance_dict[symbol]
+        proportional_weight_in_nonmarket_portfolio = sum_of_valid_alphas / sum_of_valid_nonsys_vars
+        propotional_weight_in_market_portfolio = self.expected_return[self.market_symbol] / self.variance_dict[self.market_symbol]
+        market_factor_weighting = propotional_weight_in_market_portfolio / proportional_weight_in_nonmarket_portfolio
+        #we subtract 1 because we want to know how much in % form the market is greater than the non market
+        market_factor_weighting = market_factor_weighting - 1
+        #this calculation solves for the amount in the non-market portfolio
+        allocation_non_market_portfolio = 1 / (1 + market_factor_weighting)
+        allocation_market_portfolio = market_factor_weighting * allocation_non_market_portfolio
+        #Calculate optimal portfolio weighting
+        for symbol in self.symbol_list[0:]:
+            if symbol == self.market_symbol:
+                self.optimal_portfolio_weighting_dict[symbol] = allocation_market_portfolio
+            else:
+                if self.jensens_alpha_dict[symbol] > 0 and self.check1_dict[symbol] is True:
+                    self.optimal_portfolio_weighting_dict[symbol] = (allocation_non_market_portfolio * self.non_market_weightings_only_dict[symbol])
+                else:
+                    self.optimal_portfolio_weighting_dict[symbol] = 0
+        statistic_df['Optimized Weightings'] = pd.DataFrame.from_dict(self.optimal_portfolio_weighting_dict, orient='index', columns=['Optimized Weightings'])
 # -------------------------------
 # -------------------------------
 #Start portfolio
@@ -220,12 +272,12 @@ class PortfolioManagement:
 #portfolio expected return
 # 1 - Actual Weight of portfolio should be ivnested in the risk free rate!!!
 # portfolio weight is the sum of all the securities in the portfolio
-        portfolio_row.loc['Portfolio', 'Actual Weight'] = statistic_df['Actual Weight'].sum()
+        portfolio_row.loc['Portfolio', 'Actual Weight'] = statistic_df['Optimized Weightings'].sum()
         for symbol in self.symbol_list[0:]:
             if symbol == self.symbol_list[0]:
-                portfolio_expected_return = statistic_df.loc[symbol, 'Expected Return'] * statistic_df.loc[symbol, 'Actual Weight']
+                portfolio_expected_return = statistic_df.loc[symbol, 'Expected Return'] * statistic_df.loc[symbol, 'Optimized Weightings']
             else:
-                portfolio_expected_return += statistic_df.loc[symbol, 'Expected Return'] * statistic_df.loc[symbol, 'Actual Weight']
+                portfolio_expected_return += statistic_df.loc[symbol, 'Expected Return'] * statistic_df.loc[symbol, 'Optimized Weightings']
         portfolio_expected_return += (1 - portfolio_row.loc['Portfolio', 'Actual Weight']) * self.annual_risk_free_rate
         portfolio_row.loc['Portfolio', 'Expected Return'] = portfolio_expected_return
 #portfolio variance
@@ -236,14 +288,14 @@ class PortfolioManagement:
         sum_of_covariance_terms = 0
         for i, symbol_1 in enumerate(self.symbol_list[0:]):
             for j, symbol_2 in enumerate(self.symbol_list[0:]):
-                weight_1 = statistic_df.loc[symbol_1, 'Actual Weight']
-                weight_2 = statistic_df.loc[symbol_2, 'Actual Weight']
+                weight_1 = statistic_df.loc[symbol_1, 'Optimized Weightings']
+                weight_2 = statistic_df.loc[symbol_2, 'Optimized Weightings']
                 covariance = covariance_matrix.loc[symbol_1, symbol_2]
                 if i != j:
                     sum_of_covariance_terms += weight_1 * weight_2 * covariance
         sum_of_variance_terms = 0
         for symbol in self.symbol_list[0:]:
-            weight = statistic_df.loc[symbol, 'Actual Weight']
+            weight = statistic_df.loc[symbol, 'Optimized Weightings']
             variance = statistic_df.loc[symbol, 'Variance']
             sum_of_variance_terms += (weight**2) * variance
         portfolio_variance = sum_of_variance_terms + sum_of_covariance_terms
@@ -251,7 +303,7 @@ class PortfolioManagement:
 #portfolio beta -> weighted average of holding betas
         portfolio_beta = 0
         for symbol in self.symbol_list[0:]:
-            portfolio_beta += statistic_df.loc[symbol, 'Beta'] * statistic_df.loc[symbol, 'Actual Weight']
+            portfolio_beta += statistic_df.loc[symbol, 'Beta'] * statistic_df.loc[symbol, 'Optimized Weightings']
         portfolio_row.loc['Portfolio', 'Beta'] = portfolio_beta
 #portfolio sharpe ratio
         portfolio_sharpe_ratio = (portfolio_expected_return - self.annual_risk_free_rate) / math.sqrt(portfolio_variance)
@@ -265,8 +317,6 @@ class PortfolioManagement:
 #portfolio jensens alpha
         portfolio_jensens_alpha = (portfolio_expected_return - (self.annual_risk_free_rate + 1 * (self.expected_market_return - self.annual_risk_free_rate)))
         portfolio_row.loc['Portfolio', 'Jensen\'s Alpha'] = portfolio_jensens_alpha
-#portfolio weight is the sum of all the securities in the portfolio
-        portfolio_row.loc['Portfolio', 'Actual Weight'] = statistic_df['Actual Weight'].sum()
         portfolio_row = portfolio_row.dropna(axis=1, how='any')
         statistic_df = pd.concat([statistic_df, portfolio_row])
         if return_portfolio_only:
@@ -277,16 +327,11 @@ class PortfolioManagement:
         return statistic_df
 
     def risk_return_tradeoff_test(self, portfolio_mode=False):
-        #take the market portfolio
-        #syphon through the list of securities, and perform the evaluation calculation to see if they belong in the portfolio
-        #if they do not, print this security does not belong in the portfolio and print the various metrics
-        #if they do, print this security belongs in the portfolio and print the various metrics
         # we also need to create a new optimized portfolio, so we need the weight of the securities included, which is information ratio
         # 1- weight is invested in risk free rate
         # I also want this to work for a given portfolio
 
         # Weight of a security in portfolio equals the Information Ratio of the security divided by the sum of all information ratios in the portfolio
-        #if the jensen alpha is negative, it is not included in the portfolio
         statistic_df = self.calculate_statistics()
         correlation_matrix = self.generate_correlation_matrix(print_on=False, return_on=True)
         covariance_matrix = self.generate_covariance_matrix(print_on=False, return_on=True)
@@ -295,14 +340,16 @@ class PortfolioManagement:
             if symbol == self.market_symbol:
                 continue
             else:
-                new_beta = (correlation_matrix.loc[symbol, self.market_symbol] * (math.sqrt(self.variance_dict[symbol]) / math.sqrt(self.variance_dict[self.market_symbol])))
-                new_expected_return = risk_free_rate + new_beta * (statistic_df.loc[self.market_symbol, 'Expected Return'] - risk_free_rate)
-                new_sharpe_ratio = (new_expected_return - risk_free_rate) / math.sqrt(self.variance_dict[symbol])
-                if new_sharpe_ratio > (statistic_df.loc[self.market_symbol, 'Sharpe Ratio'] * (correlation_matrix.loc[symbol, self.market_symbol])):
-                    print(f"{symbol}: Passed Check 1: New Sharpe Ratio is Greater Than Previous Sharpe Ratio * Correlation")
-                    print(f"New Expected Return: {new_expected_return:.4f}, Old Expected Return: {statistic_df.loc[self.market_symbol, 'Expected Return']:.4f}")
-                    print(f"New Sharpe Ratio: {new_sharpe_ratio:.4f}, Old Sharpe Ratio: {statistic_df.loc[self.market_symbol, 'Sharpe Ratio']:.4f}")
+                check1_beta = (correlation_matrix.loc[symbol, self.market_symbol] * (math.sqrt(self.variance_dict[symbol]) / math.sqrt(self.variance_dict[self.market_symbol])))
+                check1_expected_return = risk_free_rate + check1_beta * (statistic_df.loc[self.market_symbol, 'Expected Return'] - risk_free_rate)
+                check1_sharpe_ratio = (check1_expected_return - risk_free_rate) / math.sqrt(self.variance_dict[symbol])
+                if check1_sharpe_ratio > (statistic_df.loc[self.market_symbol, 'Sharpe Ratio'] * (correlation_matrix.loc[symbol, self.market_symbol])):
+                    print(f"{symbol}:") 
+                    print(f"Passed Check 1: New Sharpe Ratio is Greater Than Previous Sharpe Ratio * Correlation")
+                    print(f"New Expected Return: {check1_expected_return:.4f}, Old Expected Return: {statistic_df.loc[self.market_symbol, 'Expected Return']:.4f}")
+                    print(f"New Sharpe Ratio: {check1_sharpe_ratio:.4f}, Old Sharpe Ratio: {statistic_df.loc[self.market_symbol, 'Sharpe Ratio']:.4f}")
                     if self.jensens_alpha_dict[symbol] > 0:
+                        
                         print(f'Passed Check 2: Jensen\'s Alpha is positive')
                         print("--------------------------------------------------")
                     else:
